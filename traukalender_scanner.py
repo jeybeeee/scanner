@@ -105,15 +105,21 @@ def fill_person(page, person: dict, idx: int) -> None:
         value = person.get(key, "")
         if not value:
             continue
-        loc = page.get_by_label(label, exact=True).nth(idx)
-        if kind == "text":
-            loc.fill(value)
-        elif kind == "select":
-            choose(page, loc, value)
-        elif kind == "tags":
-            loc.click()
-            page.keyboard.type(value)
-            page.keyboard.press("Enter")
+        try:
+            loc = page.get_by_label(label, exact=True).nth(idx)
+            if kind == "text":
+                loc.fill(value)
+            elif kind == "select":
+                choose(page, loc, value)
+            elif kind == "tags":
+                loc.click()
+                page.keyboard.type(value)
+                page.keyboard.press("Enter")
+        except Exception as e:  # noqa: BLE001
+            # nur Feldname + Fehlertyp, nie den eingegebenen Wert
+            raise RuntimeError(
+                f"Feld '{label}' (Person {idx + 1}) nicht bedienbar: {type(e).__name__}"
+            ) from None
 
 
 def first_free_date(page_text: str):
@@ -123,24 +129,55 @@ def first_free_date(page_text: str):
     return min(dates) if dates else None
 
 
+def diagnose(page) -> str:
+    """Strukturinfos ohne Eingabewerte (nur Beschriftungen) - für die Fehlersuche."""
+    try:
+        info = page.evaluate(
+            """() => {
+              const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+              return {
+                path: location.pathname,
+                inputs: document.querySelectorAll('input').length,
+                selects: document.querySelectorAll('select').length,
+                checkboxes: [...document.querySelectorAll('input[type=checkbox]')]
+                    .map(e => ({vis: vis(e), checked: e.checked})),
+                labels: [...document.querySelectorAll('label')].filter(vis)
+                    .map(e => (e.innerText||'').trim().slice(0,40)).slice(0,40),
+                buttons: [...document.querySelectorAll('button')].filter(vis)
+                    .map(e => (e.innerText||'').trim().slice(0,30)).slice(0,15),
+                headings: [...document.querySelectorAll('h1,h2,h3')].filter(vis)
+                    .map(e => (e.innerText||'').trim().slice(0,50)).slice(0,10)
+              };
+            }"""
+        )
+        return json.dumps(info, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        return f"diagnose fehlgeschlagen: {type(e).__name__}"
+
+
 def check_once(browser, cfg: dict, debug: bool):
-    """Gibt (erstes_freies_Datum | None) zurück. Wirft bei Seitenfehlern."""
+    """Gibt das erste freie Datum zurück. Wirft RuntimeError mit Schritt-Angabe."""
     ctx = browser.new_context(locale="de-DE", viewport={"width": 1280, "height": 1600})
     page = ctx.new_page()
     page.set_default_timeout(20000)
+    stage = "0 (Seite laden)"
     try:
         page.goto(START_URL)
-        # Schritt 1: Datenschutz
-        page.get_by_role("checkbox").first.check()
+        stage = "1 (Datenschutz-Haken)"
+        cb = page.locator("input[type=checkbox]").first
+        try:
+            cb.check(timeout=5000)
+        except Exception:  # noqa: BLE001
+            cb.check(force=True)
         page.get_by_role("button", name="Weiter").first.click()
-        # Schritt 2: Personendaten (wird NICHT abgeschickt, nur bis Terminübersicht)
+        stage = "2 (Personendaten)"
         page.get_by_text("Person 2").first.wait_for()
         for i, person in enumerate(cfg["persons"]):
             fill_person(page, person, i)
         if debug:
             page.screenshot(path="debug_schritt2.png", full_page=True)
         page.get_by_role("button", name="Weiter").first.click()
-        # Schritt 3: Termine
+        stage = "3 (Terminuebersicht)"
         page.get_by_text("Termine verfügbar").first.wait_for()
         time.sleep(1.5)  # Seite setzt den ersten freien Tag selbst
         text = page.inner_text("body")
@@ -149,11 +186,13 @@ def check_once(browser, cfg: dict, debug: bool):
             Path("debug_schritt3.html").write_text(page.content(), encoding="utf-8")
         found = first_free_date(text)
         if found is None:
-            raise RuntimeError(
-                "Kein 'Verfügbarkeit am ...' gefunden - Seite anders als erwartet "
-                "(mit --debug prüfen)."
-            )
+            raise RuntimeError("Kein 'Verfuegbarkeit am ...' gefunden")
         return found
+    except Exception as e:  # noqa: BLE001
+        first = (str(e).splitlines() or [""])[0][:200]
+        log(f"Abbruch in Schritt {stage}: {type(e).__name__}: {first}")
+        log("Seitenstruktur: " + diagnose(page))
+        raise RuntimeError(f"Schritt {stage}") from None
     finally:
         ctx.close()  # nie "Termin reservieren" klicken
 
