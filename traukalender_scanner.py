@@ -100,6 +100,33 @@ def choose(page, loc, value: str) -> None:
     page.get_by_role("option", name=value, exact=True).first.click()
 
 
+def pick_tag(page, label: str, idx: int, value: str) -> None:
+    """Mehrfachauswahl-Feld (z. B. Staatsangehörigkeit). get_by_label trifft hier
+    pro Person mehrere Elemente, daher über das sichtbare Label der Person gehen."""
+    lab = page.locator(f"label:text-is('{label}')").nth(idx)
+    lab.scroll_into_view_if_needed()
+    attempts = [
+        lambda: lab.click(timeout=5000),
+        lambda: lab.click(timeout=5000, force=True),
+        lambda: lab.locator("xpath=following::input[not(@type='hidden')][1]").click(
+            timeout=5000, force=True),
+        lambda: page.get_by_label(label, exact=True).nth(idx).click(timeout=5000),
+    ]
+    last = None
+    for attempt in attempts:
+        try:
+            attempt()
+            last = None
+            break
+        except Exception as e:  # noqa: BLE001
+            last = e
+    if last is not None:
+        raise last
+    page.keyboard.type(value)
+    page.keyboard.press("Enter")
+    page.keyboard.press("Escape")  # Auswahlliste schließen
+
+
 def fill_person(page, person: dict, idx: int) -> None:
     for label, key, kind in FIELDS:
         value = person.get(key, "")
@@ -112,9 +139,7 @@ def fill_person(page, person: dict, idx: int) -> None:
             elif kind == "select":
                 choose(page, loc, value)
             elif kind == "tags":
-                loc.click()
-                page.keyboard.type(value)
-                page.keyboard.press("Enter")
+                pick_tag(page, label, idx, value)
         except Exception as e:  # noqa: BLE001
             # nur Feldname + Fehlertyp, nie den eingegebenen Wert
             raise RuntimeError(
