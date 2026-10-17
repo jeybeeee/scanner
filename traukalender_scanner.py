@@ -251,6 +251,20 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    # Konfiguration prüfen (loggt nur Feldnamen, nie Werte)
+    missing = []
+    persons = cfg.get("persons", [])
+    if len(persons) != 2:
+        missing.append("persons: genau 2 Eintraege noetig")
+    for i, per in enumerate(persons):
+        for _, key, _ in FIELDS:
+            if key != "geburtsname" and not str(per.get(key, "")).strip():
+                missing.append(f"Person {i + 1}: {key}")
+        if not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", str(per.get("geburtsdatum", ""))):
+            missing.append(f"Person {i + 1}: geburtsdatum (Format TT.MM.JJJJ)")
+    if missing:
+        log("KONFIGURATION UNVOLLSTAENDIG - leer/falsch: " + ", ".join(missing))
+        sys.exit(2)
     deadline = dt.date.fromisoformat(cfg.get("deadline", "2026-12-31"))
     interval = max(30, int(cfg.get("interval_seconds", 60)))
     last_alert = {"date": None, "ts": 0.0}
