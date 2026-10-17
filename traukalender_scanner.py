@@ -101,33 +101,74 @@ def choose(page, loc, value: str) -> None:
 
 
 def pick_tag(page, label: str, idx: int, value: str) -> None:
-    """Mehrfachauswahl-Feld (z. B. Staatsangehörigkeit). get_by_label trifft hier
-    pro Person mehrere Elemente, daher über das sichtbare Label der Person gehen."""
+    """Mehrfachauswahl-Feld (Staatsangehörigkeit): öffnen, Wert wählen, prüfen."""
     lab = page.locator(f"label:text-is('{label}')").nth(idx)
     lab.scroll_into_view_if_needed()
-    attempts = [
-        lambda: lab.click(timeout=5000),
-        lambda: lab.click(timeout=5000, force=True),
-        lambda: lab.locator("xpath=following::input[not(@type='hidden')][1]").click(
-            timeout=5000, force=True),
-        lambda: page.get_by_label(label, exact=True).nth(idx).click(timeout=5000),
-    ]
-    last = None
-    for attempt in attempts:
+    box = lab.locator("xpath=..")
+
+    def box_text() -> str:
         try:
-            attempt()
-            last = None
-            break
-        except Exception as e:  # noqa: BLE001
-            last = e
-    if last is not None:
-        raise last
-    page.keyboard.type(value)
-    page.keyboard.press("Enter")
-    try:  # Auswahlliste schließen, ohne die Auswahl zu verlieren
-        page.get_by_role("heading", name=f"Person {idx + 1}").click(timeout=2000)
+            return box.inner_text(timeout=2000)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def done() -> bool:
+        return value.lower() in box_text().lower()
+
+    def close() -> None:
+        try:
+            page.get_by_role("heading", name=f"Person {idx + 1}").click(timeout=2000)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def open_container() -> None:
+        bb = box.bounding_box()
+        box.click(position={"x": bb["width"] / 2, "y": bb["height"] * 0.7}, timeout=5000)
+
+    def open_input() -> None:
+        lab.locator("xpath=following::input[not(@type='hidden')][1]").click(
+            timeout=5000, force=True)
+
+    def open_label() -> None:
+        lab.click(timeout=5000, force=True)
+
+    strategies = [
+        (open_container, "type"),
+        (open_container, "option"),
+        (open_input, "type"),
+        (open_label, "type"),
+    ]
+    for opener, mode in strategies:
+        try:
+            opener()
+            page.wait_for_timeout(400)
+            if mode == "type":
+                page.keyboard.type(value, delay=60)
+                page.wait_for_timeout(600)
+                page.keyboard.press("Enter")
+            else:
+                pattern = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
+                page.get_by_role("option", name=pattern).first.click(timeout=3000)
+            page.wait_for_timeout(300)
+            close()
+            if done():
+                return
+        except Exception:  # noqa: BLE001
+            close()
+    # Fehlersuche: nur Tags/Klassen/Rollen, keine Texte oder Werte
+    try:
+        struct = box.evaluate(
+            """e => [e, ...e.querySelectorAll('*')].slice(0, 18).map(x =>
+                x.tagName.toLowerCase()
+                + (typeof x.className === 'string' && x.className
+                    ? '.' + x.className.split(' ').slice(0, 3).join('.') : '')
+                + (x.getAttribute('role') ? '[role=' + x.getAttribute('role') + ']' : '')
+            ).join(' | ')"""
+        )
+        log(f"Auswahlfeld-Struktur ({label}, Person {idx + 1}): {struct}")
     except Exception:  # noqa: BLE001
         pass
+    raise RuntimeError("Auswahl nicht uebernommen")
 
 
 def fill_person(page, person: dict, idx: int) -> None:
