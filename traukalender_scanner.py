@@ -124,7 +124,10 @@ def pick_tag(page, label: str, idx: int, value: str) -> None:
         raise last
     page.keyboard.type(value)
     page.keyboard.press("Enter")
-    page.keyboard.press("Escape")  # Auswahlliste schließen
+    try:  # Auswahlliste schließen, ohne die Auswahl zu verlieren
+        page.get_by_role("heading", name=f"Person {idx + 1}").click(timeout=2000)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def fill_person(page, person: dict, idx: int) -> None:
@@ -166,8 +169,20 @@ def diagnose(page) -> str:
                 selects: document.querySelectorAll('select').length,
                 checkboxes: [...document.querySelectorAll('input[type=checkbox]')]
                     .map(e => ({vis: vis(e), checked: e.checked})),
-                labels: [...document.querySelectorAll('label')].filter(vis)
-                    .map(e => (e.innerText||'').trim().slice(0,40)).slice(0,40),
+                fields: [...document.querySelectorAll('label')].filter(vis).map(l => {
+                    const lab = (l.innerText||'').trim().slice(0,30);
+                    const box = l.parentElement;
+                    const txt = box ? (box.innerText||'').replace(l.innerText,'').trim() : '';
+                    const c = l.control;
+                    const filled = !!((c && c.value) || (txt && !txt.startsWith('Bitte w')));
+                    const inv = (c && c.matches && c.matches(':invalid')) ? '!inv' : '';
+                    return lab + ':' + (filled ? 'ok' : 'LEER') + inv;
+                }).slice(0,40),
+                errors: [...document.querySelectorAll('body *')]
+                    .filter(e => vis(e) && e.children.length === 0)
+                    .map(e => (e.innerText||'').trim())
+                    .filter(t => /pflicht|erforderlich|ungültig|ungueltig|fehler|falsch|muss/i.test(t))
+                    .map(t => t.slice(0,80)).slice(0,8),
                 buttons: [...document.querySelectorAll('button')].filter(vis)
                     .map(e => (e.innerText||'').trim().slice(0,30)).slice(0,15),
                 headings: [...document.querySelectorAll('h1,h2,h3')].filter(vis)
@@ -202,6 +217,7 @@ def check_once(browser, cfg: dict, debug: bool):
         if debug:
             page.screenshot(path="debug_schritt2.png", full_page=True)
         page.get_by_role("button", name="Weiter").first.click()
+        page.wait_for_timeout(1500)
         stage = "3 (Terminuebersicht)"
         page.get_by_text("Termine verfügbar").first.wait_for()
         time.sleep(1.5)  # Seite setzt den ersten freien Tag selbst
